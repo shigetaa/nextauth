@@ -8,6 +8,8 @@ npm install next-auth @next-auth/prisma-adapter
 npm install nodemailer
 npm install sqlite3
 npm install prisma @prisma/client
+npm install bcrypt
+npm install -D @types/bcrypt
 ```
 以下のコマンドを実行しPrismaを初期化します。
 `.env`と`/prisma/prisma/schema.prisma`が作成されます。
@@ -23,28 +25,6 @@ vi .env
 NEXTAUTH_URL=
 NEXTAUTH_SECRET=
 # Linux: `openssl rand -hex 32` or go to https://generate-secret.now.sh/32
-
-AUTH0_ID=
-AUTH0_SECRET=
-AUTH0_ISSUER=
-
-FACEBOOK_ID=
-FACEBOOK_SECRET=
-
-GITHUB_ID=
-GITHUB_SECRET=
-
-GOOGLE_ID=
-GOOGLE_SECRET=
-
-TWITTER_ID=
-TWITTER_SECRET=
-
-LINE_CLIENT_ID=
-LINE_CLIENT_SECRET=
-
-EMAIL_SERVER=smtp://username:password@smtp.example.com:587
-EMAIL_FROM=NextAuth <noreply@example.com>
 
 DATABASE_URL="file:./data.db"
 ```
@@ -98,6 +78,7 @@ model User {
   name          String?
   email         String?   @unique
   emailVerified DateTime?
+  crypted_password String?
   image         String?
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -124,8 +105,61 @@ npx prisma generate
 ```bash
 npx prisma migrate dev
 ```
+テストユーザーをデータベースに登録する`Seed`ファイルを実装
+```bash
+vi prisma/seed.ts
+```
+```typescript
+import { Prisma, PrismaClient } from '@prisma/client'
+import bcrypt from 'bcrypt'
 
+const prisma = new PrismaClient()
 
+const main = async () => {
+	const saltRounds = 10
+	const password = "test"
+	const hashedPassword = await bcrypt.hash(password, saltRounds)
+
+	const testUser = await prisma.user.upsert({
+		where: { email: 'akira@example.com' },
+		update: {},
+		create: {
+			email: 'akira@example.com',
+			name: 'akira',
+			cryptedPassword: hashedPassword
+		},
+	})
+	console.log(testUser)
+}
+
+main()
+	.catch((e) => {
+		console.error(e)
+		process.exit(1)
+	}).finally(async () => {
+		await prisma.$disconnect()
+	})
+```
+実行コマンドを`package.json`に設定
+```bash
+vi package.json
+```
+以下を追記する。
+```json
+  "prisma": {
+    "seed": "npx ts-node --compiler-options {\"module\":\"CommonJS\"} prisma/seed.ts"
+  },
+```
+Seed を実行して、テストデータを登録する
+```bash
+npx prisma db seed
+```
+データベースに登録されているかブラウザで確認する為
+以下のコマンドで **Prisma** のGUIを起動して、テストデータを確認する。
+```bash
+npx prisma studio
+```
+認証処理を実装していく
 ```bash
 mkdir pages/api/auth
 vi pages/api/auth/[...nextauth].ts
@@ -133,85 +167,50 @@ vi pages/api/auth/[...nextauth].ts
 ```typescript
 import NextAuth, { NextAuthOptions } from "next-auth"
 import CredentialsProvider from "next-auth/providers/credentials"
-import GoogleProvider from "next-auth/providers/google"
-import FacebookProvider from "next-auth/providers/facebook"
-import GithubProvider from "next-auth/providers/github"
-import TwitterProvider from "next-auth/providers/twitter"
-import Auth0Provider from "next-auth/providers/auth0"
-import EmailProvider from "next-auth/providers/email"
-import LineProvider from "next-auth/providers/line"
 import { PrismaAdapter } from "@next-auth/prisma-adapter"
 import { PrismaClient } from "@prisma/client"
+import bcrypt from 'bcrypt'
 
 const prisma = new PrismaClient()
-// For more information on each option (and a full list of options) go to
-// https://next-auth.js.org/configuration/options
 export const authOptions: NextAuthOptions = {
-	// https://next-auth.js.org/configuration/providers/oauth
 	providers: [
 		CredentialsProvider({
 			name: "User Acount",
 			credentials: {
-				username: { label: "Acount", type: "text", placeholder: "User Acount" },
+				email: { label: "Email", type: "text", placeholder: "user@example.com" },
 				password: { label: "Password", type: "password" }
 			},
 			async authorize(credentials, req) {
-				const user = { id: 1, name: "Akira", email: "akira@example.com" }
-				if (user) {
-					return user
-				} else {
+				const { email, password } = credentials as { email: string; password: string }
+				const user = await prisma.user.findFirst({
+					where: { email: email }
+				})
+				if (!user) {
+					console.log('not email')
 					return null
 				}
+				const isPassword = await bcrypt.compare(password, user.cryptedPassword || '')
+				if (!isPassword) {
+					console.log('not password')
+					return null
+				}
+				return user
 			}
-		}),
-		EmailProvider({
-			server: process.env.EMAIL_SERVER || "",
-			from: process.env.EMAIL_FROM || "",
-		}),
-		// https://developers.line.biz/ja/docs/line-login/integrate-line-login/
-		LineProvider({
-			clientId: process.env.LINE_CLIENT_ID || "",
-			clientSecret: process.env.LINE_CLIENT_SECRET || "",
-		}),
-		FacebookProvider({
-			clientId: process.env.FACEBOOK_ID || "",
-			clientSecret: process.env.FACEBOOK_SECRET || "",
-		}),
-		GithubProvider({
-			clientId: process.env.GITHUB_ID || "",
-			clientSecret: process.env.GITHUB_SECRET || "",
-		}),
-		GoogleProvider({
-			clientId: process.env.GOOGLE_ID || "",
-			clientSecret: process.env.GOOGLE_SECRET || "",
-		}),
-		TwitterProvider({
-			clientId: process.env.TWITTER_ID || "",
-			clientSecret: process.env.TWITTER_SECRET || "",
-		}),
-		Auth0Provider({
-			clientId: process.env.AUTH0_ID || "",
-			clientSecret: process.env.AUTH0_SECRET || "",
-			issuer: process.env.AUTH0_ISSUER,
 		}),
 	],
 	theme: {
 		colorScheme: "light",
 	},
-	callbacks: {
-		async jwt({ token }) {
-			console.log('callbacks jwt')
-			console.log(token)
-			token.userRole = "admin"
-			return token
-		},
+	session: {
+		strategy: 'jwt'
 	},
+	secret: process.env.NEXTAUTH_SECRET,
 	adapter: PrismaAdapter(prisma)
 }
 
 export default NextAuth(authOptions)
 ```
-
+SessionProvider を実装する。
 ```bash
 vi pages/_app.tsx
 ```
@@ -222,7 +221,7 @@ import { Session } from 'next-auth'
 
 const App = ({ Component, pageProps }: AppProps<{ session: Session }>) => {
   return (
-    <SessionProvider session={pageProps.session} refetchInterval={0}>
+    <SessionProvider session={pageProps.session}>
       <Component {...pageProps} />
     </SessionProvider>
   )
@@ -231,7 +230,7 @@ const App = ({ Component, pageProps }: AppProps<{ session: Session }>) => {
 export default App
 
 ```
-
+トップページを作成
 ```bash
 vi pages/index.tsx
 ```
@@ -240,7 +239,6 @@ import { useSession, signIn, signOut } from "next-auth/react"
 
 const IndexPage = () => {
   const { data: session } = useSession()
-  console.log(session)
   return <>
     {!session && <>
       Not signed in <br />
@@ -255,3 +253,8 @@ const IndexPage = () => {
 
 export default IndexPage
 ```
+開発サーバを起動してブラウザで認証確認
+```bash
+npm run dev
+```
+ブラウザーで http://localhost:3000 にアクセスして認証出来るか確認する。
