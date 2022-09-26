@@ -258,3 +258,189 @@ export default IndexPage
 npm run dev
 ```
 ブラウザーで http://localhost:3000 にアクセスして認証出来るか確認する。
+
+## カスタムログイン画面
+カスタムログインページの構成コンポーネントとして、`MUI`デザインコンポーネントを使用しますので、使用できるように設定していきます。
+```bash
+npm install @mui/material @emotion/react @emotion/styled @mui/icons-material
+```
+マテリアルUIは、Roboto フォントを使用しますので以下の 外部CDNファイルを読み込みます。
+```html
+<link
+  rel="stylesheet"
+  href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap"
+/>
+```
+カスタムログインのフォーム情報を管理する為、`react-hook-form`を設定します。
+```bash
+npm install react-hook-form
+```
+サイト共通設定として、`MUI`を使用しますので`_app.tsx`を変更します。
+```bash
+vi pages/_app.tsx
+```
+```typescript
+import type { AppProps } from 'next/app'
+import { SessionProvider } from "next-auth/react"
+import { Session } from 'next-auth'
+import Head from 'next/head'
+import CssBaseline from '@mui/material/CssBaseline'
+import { createTheme, ThemeProvider } from '@mui/material/styles'
+const theme = createTheme();
+
+const App = ({ Component, pageProps }: AppProps<{ session: Session }>) => {
+  return (
+    <SessionProvider session={pageProps.session}>
+      <Head>
+        <meta name="viewport" content="initial-scale=1, width=device-width" />
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,400,500,700&display=swap" />
+      </Head>
+      <ThemeProvider theme={theme}>
+        <CssBaseline />
+        <Component {...pageProps} />
+      </ThemeProvider>
+    </SessionProvider>
+  )
+}
+
+export default App
+```
+カスタムログインページを作成していきます。
+```bash
+vi pages/login.tsx
+```
+```typescript
+import React, { useState } from "react"
+import { Button, Container, Box, Avatar, Typography, TextField, Alert, FormControl, InputLabel, OutlinedInput, IconButton, InputAdornment } from "@mui/material"
+import LockOutlinedIcon from '@mui/icons-material/LockOutlined'
+import { Visibility, VisibilityOff } from '@mui/icons-material'
+import { getCsrfToken, signIn } from "next-auth/react"
+import { useRouter } from "next/router"
+import { CtxOrReq } from "next-auth/client/_utils"
+import { useForm } from "react-hook-form"
+
+// POSTリクエスト（サインイン・サインアウトなど）に必要なCSRFトークンを返却する
+export const getServerSideProps = async (context: CtxOrReq | undefined) => {
+	return {
+		props: {
+			title: "login",
+			csrfToken: await getCsrfToken(context),
+		},
+	};
+};
+
+interface IFormValues {
+	email?: string;
+	password?: string;
+}
+const Login = ({ csrfToken }: { csrfToken: string | undefined }) => {
+	const router = useRouter()
+	const [error, setError] = useState('')
+	const [showPassword, setShowPassword] = useState(false)
+	const handleClickShowPassword = () => {
+		setShowPassword(!showPassword)
+	}
+	const handleMouseDownPassword = (event: React.MouseEvent<HTMLButtonElement>) => {
+		event.preventDefault()
+	}
+	const { register, handleSubmit } = useForm<IFormValues>()
+	const signInUser = async (data: IFormValues) => {
+		await signIn<any>("credentials", {
+			redirect: false,
+			email: data.email,
+			password: data.password,
+			callbackUrl: `${window.location.origin}`,
+		}).then((res) => {
+			if (res?.error) {
+				setError('Email , Password を正しく入力して下さい。')
+			} else {
+				router.push('/')
+			}
+		})
+	}
+
+	return (
+
+		<Container component="main" maxWidth="xs">
+			<Box
+				sx={{
+					marginTop: 8,
+					display: 'flex',
+					flexDirection: 'column',
+					alignItems: 'center',
+				}}
+			>
+				<Avatar sx={{ m: 1, bgcolor: 'secondary.main' }}>
+					<LockOutlinedIcon />
+				</Avatar>
+				<Typography component="h1" variant="h5">Sign in</Typography>
+				<Box component="form" noValidate sx={{ mt: 1 }} onSubmit={handleSubmit(signInUser)}>
+					<input name="csrfToken" type="hidden" defaultValue={csrfToken} />
+					{error && <Alert severity="error">{error}</Alert>}
+					<TextField
+						margin="normal"
+						required
+						fullWidth
+						id="email"
+						label="Email Address"
+						autoComplete="email"
+						autoFocus
+						{...register('email')}
+					/>
+					<FormControl
+						margin="normal"
+						required
+						fullWidth>
+						<InputLabel htmlFor="outlined-adornment-password">Password</InputLabel>
+						<OutlinedInput
+							id="outlined-adornment-password"
+							label="Password"
+							type={showPassword ? 'text' : 'password'}
+							autoComplete="current-password"
+							{...register('password')}
+							endAdornment={
+								<InputAdornment position="end">
+									<IconButton
+										edge="end"
+										aria-label="toggle password visibility"
+										onClick={handleClickShowPassword}
+										onMouseDown={handleMouseDownPassword}
+									>
+										{showPassword ? <VisibilityOff /> : <Visibility />}
+									</IconButton>
+								</InputAdornment>
+							}
+						/>
+					</FormControl>
+					<Button
+						type="submit"
+						fullWidth
+						variant="contained"
+						sx={{ mt: 3, mb: 2 }}
+					>
+						Sign In
+					</Button>
+				</Box>
+			</Box>
+		</Container>
+	)
+}
+
+export default Login
+```
+カスタムログインページの指定するため、`[..nextauth].ts`ファイルに`pages`プロパティを追加してしていします。
+```bash
+vim pages/api/auth/[...nextauth].ts
+```
+`authOptions` オブジェクト内に追記
+```typescript
+	pages: {
+		signIn: '/login',
+		signOut: '/login'
+	},
+```
+開発サーバーを起動
+```bash
+npm run dev
+```
+http://localhost:3000/login にアクセスすると無事ログインフォームが表示して、認証が出来たら完成です。
